@@ -1,0 +1,23 @@
+{
+  "name": "My Princess Plan 👑 - Lập Plan Đi Chơi Dễ Thương",
+  "short_name": "Princess Plan",
+  "description": "Bảng lập lịch trình hẹn hò kéo thả sticker, gửi giấy nhớ đáng yêu & đồng bộ đa nền tảng cho cặp đôi.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fff6f9",
+  "theme_color": "#ff7eb3",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/crown-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/stickers/princess-prince.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}

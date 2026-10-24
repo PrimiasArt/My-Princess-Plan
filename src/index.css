@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Fredoka', 'Mali', 'Itim', 'Quicksand', sans-serif;
+    --font-body: 'Quicksand', 'Mali', sans-serif;
+  }
+
+  body {
+    font-family: var(--font-body);
+    background-color: #fff6f9;
+    background-image:
+      radial-gradient(#ffd4e5 1.25px, transparent 1.25px),
+      radial-gradient(#e9d5ff 1.25px, #fff6f9 1.25px);
+    background-size: 36px 36px;
+    background-position: 0 0, 18px 18px;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+}
+
+/* Native dialog styling & top-layer motion per modern-web-guidance */
+dialog.princess-dialog::backdrop {
+  background-color: rgba(74, 43, 59, 0.42);
+  backdrop-filter: blur(4px);
+}
+
+dialog.princess-dialog[open] {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  transition:
+    opacity 0.22s ease-out,
+    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+    overlay 0.22s allow-discrete,
+    display 0.22s allow-discrete;
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+@starting-style {
+  dialog.princess-dialog[open] {
+    opacity: 0;
+    transform: scale(0.92) translateY(10px);
+  }
+}
+
+/* Cute floating & bobbing animations using transform/opacity on compositor */
+@keyframes float-gentle {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(1.5deg);
+  }
+}
+
+@keyframes pulse-crown {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+.animate-float-cute {
+  animation: float-gentle 3.5s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+.animate-crown-bounce {
+  animation: pulse-crown 2.2s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+/* Custom cute scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #fff0f6;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #ffadd2;
+  border-radius: 9999px;
+  border: 2px solid #fff0f6;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #ff85b3;
+}
