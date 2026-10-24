@@ -52,6 +52,8 @@ import {
   NOTE_COLOR_LABELS,
   QUICK_NOTE_TEMPLATES,
   localizeDynamicText,
+  localizeRoomDataSync,
+  translateRoomDataAsync,
 } from './i18n/translations';
 import { soundFX } from './utils/soundEffects';
 import {
@@ -102,51 +104,14 @@ const NOTE_COLOR_STYLES: Record<
   },
 };
 
-function localizeRoomData(data: CoupleRoomData, targetLang: AppLanguage): CoupleRoomData {
-  return {
-    ...data,
-    princeName: localizeDynamicText(data.princeName, targetLang),
-    princessName: localizeDynamicText(data.princessName, targetLang),
-    plans: data.plans.map((plan) => ({
-      ...plan,
-      title: localizeDynamicText(plan.title, targetLang),
-      dressCode: localizeDynamicText(plan.dressCode, targetLang),
-      princessMood: localizeDynamicText(plan.princessMood, targetLang),
-      approvalMessage: localizeDynamicText(plan.approvalMessage, targetLang),
-      slots: plan.slots.map((slot) => ({
-        ...slot,
-        periodName: localizeDynamicText(slot.periodName, targetLang),
-        timeLabel: localizeDynamicText(slot.timeLabel, targetLang),
-        activities: slot.activities.map((act) => ({
-          ...act,
-          title: localizeDynamicText(act.title, targetLang),
-          timeRange: localizeDynamicText(act.timeRange, targetLang),
-          location: localizeDynamicText(act.location, targetLang),
-          note: localizeDynamicText(act.note, targetLang),
-        })),
-      })),
-      stickyNotes: plan.stickyNotes.map((n) => ({
-        ...n,
-        authorName: localizeDynamicText(n.authorName, targetLang),
-        content: localizeDynamicText(n.content, targetLang),
-        tag: localizeDynamicText(n.tag, targetLang),
-        createdAt: localizeDynamicText(n.createdAt, targetLang),
-      })),
-      floatingStickers: plan.floatingStickers.map((fs) => ({
-        ...fs,
-        caption: localizeDynamicText(fs.caption, targetLang),
-      })),
-    })),
-  };
-}
-
 export const App: React.FC = () => {
   const [lang, setLang] = useState<AppLanguage>(() => getSavedLanguage());
+  const [isTranslating, setIsTranslating] = useState(false);
   const t = UI_TEXT[lang];
 
   const [roomPin, setRoomPin] = useState<string>(() => getSavedRoomPin());
   const [roomData, setRoomData] = useState<CoupleRoomData>(() =>
-    localizeRoomData(loadLocalRoomData(getSavedRoomPin()), getSavedLanguage())
+    localizeRoomDataSync(loadLocalRoomData(getSavedRoomPin()), getSavedLanguage())
   );
   const [currentRole, setCurrentRole] = useState<'prince' | 'princess'>('prince');
   const [syncStatus, setSyncStatus] = useState<'synced' | 'local' | 'error'>('local');
@@ -208,21 +173,31 @@ export const App: React.FC = () => {
   // Countdown state
   const [countdownText, setCountdownText] = useState<string>('');
 
-  // Switch Language Handler (VN <-> TH)
-  const handleSwitchLanguage = (nextLang: AppLanguage) => {
+  // Switch Language Handler (VN <-> TH) with full automatic translation
+  const handleSwitchLanguage = async (nextLang: AppLanguage) => {
     if (nextLang === lang) return;
     soundFX.playPop();
     setLang(nextLang);
     setSavedLanguage(nextLang);
     setNoteTag(NOTE_TAGS_BY_LANG[nextLang][0]);
 
-    setRoomData((prev) => {
-      const localized = localizeRoomData(prev, nextLang);
-      setPrinceInput(localized.princeName);
-      setPrincessInput(localized.princessName);
-      saveRoomData(localized, setSyncStatus);
-      return localized;
-    });
+    // 1. Immediate synchronous localization for dictionary & cached phrases
+    const syncUpdated = localizeRoomDataSync(roomData, nextLang);
+    setRoomData(syncUpdated);
+    setPrinceInput(syncUpdated.princeName);
+    setPrincessInput(syncUpdated.princessName);
+
+    // 2. Async auto-translation for any custom user-entered text (Vietnamese <-> Thai)
+    setIsTranslating(true);
+    try {
+      const fullyTranslated = await translateRoomDataAsync(syncUpdated, nextLang);
+      setRoomData(fullyTranslated);
+      setPrinceInput(fullyTranslated.princeName);
+      setPrincessInput(fullyTranslated.princessName);
+      saveRoomData(fullyTranslated, setSyncStatus);
+    } finally {
+      setIsTranslating(false);
+    }
   };
 
   // Active plan helper
@@ -231,25 +206,41 @@ export const App: React.FC = () => {
 
   // Subscribe to room updates (Firestore / BroadcastChannel / LocalStorage)
   useEffect(() => {
-    const initial = localizeRoomData(loadLocalRoomData(roomPin), lang);
+    let active = true;
+    const rawLocal = loadLocalRoomData(roomPin);
+    const initial = localizeRoomDataSync(rawLocal, lang);
     setRoomData(initial);
     setPrinceInput(initial.princeName);
     setPrincessInput(initial.princessName);
 
+    // Also run async auto-translation on initial data if needed
+    translateRoomDataAsync(initial, lang).then((translatedInit) => {
+      if (!active) return;
+      setRoomData(translatedInit);
+      setPrinceInput(translatedInit.princeName);
+      setPrincessInput(translatedInit.princessName);
+    });
+
     const unsubscribe = subscribeToRoom(
       roomPin,
       (incomingData) => {
-        setRoomData((prev) => {
-          if (incomingData.updatedAt >= prev.updatedAt) {
-            return localizeRoomData(incomingData, lang);
-          }
-          return prev;
+        translateRoomDataAsync(incomingData, lang).then((translatedIncoming) => {
+          if (!active) return;
+          setRoomData((prev) => {
+            if (incomingData.updatedAt >= prev.updatedAt) {
+              return translatedIncoming;
+            }
+            return prev;
+          });
         });
       },
       (status) => setSyncStatus(status)
     );
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [roomPin, lang]);
 
   // PWA beforeinstallprompt listener
@@ -565,7 +556,7 @@ export const App: React.FC = () => {
         activePlanId: createdRaw.id,
         plans: [...prev.plans, createdRaw],
       };
-      return localizeRoomData(nextRoom, lang);
+      return localizeRoomDataSync(nextRoom, lang);
     });
 
     setNewPlanTitle('');
@@ -629,7 +620,7 @@ export const App: React.FC = () => {
     updateRoom((prev) => ({
       ...prev,
       roomPin: cleanPin,
-      princeName: princeInput.trim() || (lang === 'th' ? 'เจ้าชาย 🤴' : 'Hoàng Tử 🤴'),
+      princeName: princeInput.trim() || (lang === 'th' ? 'คนคลั่งรัก 💘' : 'Kẻ Si Tình 💘'),
       princessName: princessInput.trim() || (lang === 'th' ? 'เจ้าหญิง 👸' : 'Công Chúa 👸'),
     }));
 
@@ -647,8 +638,8 @@ export const App: React.FC = () => {
     } catch {
       prompt(
         lang === 'th'
-          ? 'คัดลอกลิงก์นี้ส่งให้เจ้าหญิง / เจ้าชายได้เลย:'
-          : 'Copy đường link này gửi cho Công Chúa / Hoàng Tử nha:',
+          ? 'คัดลอกลิงก์นี้ส่งให้เจ้าหญิง / คนคลั่งรักได้เลย:'
+          : 'Copy đường link này gửi cho Công Chúa / Kẻ Si Tình nha:',
         shareUrl
       );
     }
@@ -693,6 +684,11 @@ export const App: React.FC = () => {
                 <span className="hidden rounded-full bg-[#ffe0ed] px-2.5 py-0.5 text-xs font-bold text-[#d63384] sm:inline-block">
                   {t.pwaBadge}
                 </span>
+                {isTranslating && (
+                  <span className="animate-pulse rounded-full bg-[#f3e8ff] px-2.5 py-0.5 text-[11px] font-bold text-[#7950f2]">
+                    {t.translatingBadge}
+                  </span>
+                )}
               </div>
               <p className="text-xs font-medium text-[#8c5872]">
                 {roomData.princeName} &amp; {roomData.princessName} • {t.appSubtitle}

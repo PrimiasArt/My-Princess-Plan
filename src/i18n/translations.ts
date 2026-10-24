@@ -1,7 +1,33 @@
-import { AppLanguage, StickyNoteItem } from '../types/plan';
+import { AppLanguage, CoupleRoomData, StickyNoteItem } from '../types/plan';
 import { STICKERS } from '../data/stickers';
 
 const LANG_STORAGE_KEY = 'princess_plan_language';
+const TRANSLATION_CACHE_KEY = 'princess_plan_translation_cache_v2';
+
+// Native Chrome/Edge Built-in AI Translator interface per modern-web-guidance
+interface NativeTranslatorMonitor {
+  addEventListener(
+    type: 'downloadprogress',
+    listener: (e: { loaded: number }) => void
+  ): void;
+}
+
+interface NativeTranslatorOptions {
+  sourceLanguage: string;
+  targetLanguage: string;
+  monitor?: (m: NativeTranslatorMonitor) => void;
+}
+
+interface NativeTranslatorInstance {
+  translate(input: string): Promise<string>;
+}
+
+interface NativeTranslatorConstructor {
+  availability(
+    options: NativeTranslatorOptions
+  ): Promise<'available' | 'downloadable' | 'downloading' | 'unavailable'>;
+  create(options: NativeTranslatorOptions): Promise<NativeTranslatorInstance>;
+}
 
 export function getSavedLanguage(): AppLanguage {
   if (typeof window === 'undefined') return 'vi';
@@ -23,7 +49,10 @@ export function setSavedLanguage(lang: AppLanguage): void {
 
 // Bidirectional phrase dictionary for default/sample plan contents
 const PHRASE_PAIRS: Array<[string, string]> = [
-  ['Hoàng Tử 🤴', 'เจ้าชาย 🤴'],
+  ['Kẻ Si Tình 💘', 'คนคลั่งรัก 💘'],
+  ['Kẻ Si Tình 🤴', 'คนคลั่งรัก 💘'],
+  ['Hoàng Tử 🤴', 'คนคลั่งรัก 💘'],
+  ['เจ้าชาย 🤴', 'คนคลั่งรัก 💘'],
   ['Công Chúa 👸', 'เจ้าหญิง 👸'],
   ['Lịch Trình Cưng Chiều Công Chúa 👑✨', 'แพลนตามใจเจ้าหญิงสุดที่รัก 👑✨'],
   ['Foodtour Ăn Sập Phố Cùng Nàng 🧋🍲', 'ตะลุยกินของอร่อยทั่วเมืองกับหวานใจ 🧋🍲'],
@@ -59,8 +88,12 @@ const PHRASE_PAIRS: Array<[string, string]> = [
   ],
   ['Nhà hàng Lẩu & Nướng Hàn Quốc 🥩', 'ร้านปิ้งย่างเกาหลี & ชาบูหม้อไฟ 🥩'],
   [
+    'Kẻ Si Tình phụ trách nướng thịt và pha nước chấm chuẩn vị.',
+    'คนคลั่งรักรับหน้าที่ปิ้งหมูและปรุงน้ำจิ้มรสเด็ดให้เจ้าหญิง',
+  ],
+  [
     'Hoàng tử phụ trách nướng thịt và pha nước chấm chuẩn vị.',
-    'เจ้าชายรับหน้าที่ปิ้งหมูและปรุงน้ำจิ้มรสเด็ดให้เจ้าหญิง',
+    'คนคลั่งรักรับหน้าที่ปิ้งหมูและปรุงน้ำจิ้มรสเด็ดให้เจ้าหญิง',
   ],
   ['Photo Time Studio 🎞️', 'สตูดิโอถ่ายรูป Photo Time 🎞️'],
   [
@@ -93,8 +126,12 @@ const PHRASE_PAIRS: Array<[string, string]> = [
     'ขออนุญาตเลท 10 นาทีม้วนผมสวยๆ นะคะ! ตอนมารับอย่าลืมชานมไข่มุกมาติดสินบนด้วยล่ะ ฮิฮิ 🧋😤',
   ],
   [
+    'Mọi chi phí ăn chơi hôm nay đã có Thẻ Đen của Kẻ Si Tình tài trợ 100%, Công chúa chỉ cần cười thật tươi thôi! 💳✨',
+    'ค่าใช้จ่ายเที่ยววันนี้บัตรดำของคนคลั่งรักเปย์ให้ 100% เลยครับ เจ้าหญิงแค่ยิ้มหวานๆ ก็พอ! 💳✨',
+  ],
+  [
     'Mọi chi phí ăn chơi hôm nay đã có Thẻ Đen của Hoàng tử tài trợ 100%, Công chúa chỉ cần cười thật tươi thôi! 💳✨',
-    'ค่าใช้จ่ายเที่ยววันนี้บัตรดำของเจ้าชายเปย์ให้ 100% เลยครับ เจ้าหญิงแค่ยิ้มหวานๆ ก็พอ! 💳✨',
+    'ค่าใช้จ่ายเที่ยววันนี้บัตรดำของคนคลั่งรักเปย์ให้ 100% เลยครับ เจ้าหญิงแค่ยิ้มหวานๆ ก็พอ! 💳✨',
   ],
   [
     'Hôm nay đi bộ nhiều mỏi chân là Gấu nâu phải cõng Thỏ trắng về đó nha! 🐻🐰💕',
@@ -129,12 +166,274 @@ for (const st of STICKERS) {
 const VI_TO_TH_MAP = new Map<string, string>(PHRASE_PAIRS.map(([vi, th]) => [vi, th]));
 const TH_TO_VI_MAP = new Map<string, string>(PHRASE_PAIRS.map(([vi, th]) => [th, vi]));
 
+// Load persistent dynamic translation cache from localStorage
+const dynamicCache: Record<string, string> = (() => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(TRANSLATION_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+})();
+
+function saveDynamicCache() {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(dynamicCache));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function getCacheKey(text: string, targetLang: AppLanguage): string {
+  return `${targetLang}::${text.trim()}`;
+}
+
+// Upgrade legacy "Hoàng Tử" terms in Vietnamese text
+function normalizeVietnameseLegacyTerms(text: string): string {
+  if (text === 'Hoàng Tử 🤴' || text === 'เจ้าชาย 🤴') return 'Kẻ Si Tình 💘';
+  return text
+    .replace(/Hoàng Tử Rước Công Chúa/g, 'Kẻ Si Tình Rước Công Chúa')
+    .replace(/Hoàng Tử 🤴/g, 'Kẻ Si Tình 💘')
+    .replace(/Hoàng tử/g, 'Kẻ Si Tình')
+    .replace(/Hoàng Tử/g, 'Kẻ Si Tình');
+}
+
 export function localizeDynamicText(text: string | undefined, lang: AppLanguage): string {
   if (!text) return '';
+  const cleaned = lang === 'vi' ? normalizeVietnameseLegacyTerms(text) : text;
+
+  // 1. Check built-in phrase dictionary
   if (lang === 'th') {
-    return VI_TO_TH_MAP.get(text) ?? text;
+    const direct = VI_TO_TH_MAP.get(cleaned) ?? VI_TO_TH_MAP.get(text);
+    if (direct) return direct;
+  } else {
+    const direct = TH_TO_VI_MAP.get(cleaned) ?? TH_TO_VI_MAP.get(text);
+    if (direct) return normalizeVietnameseLegacyTerms(direct);
   }
-  return TH_TO_VI_MAP.get(text) ?? text;
+
+  // 2. Check cached dynamic translations
+  const cached = dynamicCache[getCacheKey(cleaned, lang)] ?? dynamicCache[getCacheKey(text, lang)];
+  if (cached) {
+    return lang === 'vi' ? normalizeVietnameseLegacyTerms(cached) : cached;
+  }
+
+  return cleaned;
+}
+
+// Detect whether a string contains Thai script or Latin/Vietnamese letters
+const THAI_REGEX = /[\u0E00-\u0E7F]/;
+const LATIN_LETTER_REGEX = /[a-zA-ZÀ-ỹ]/;
+const PURE_TIME_OR_DATE_REGEX = /^[\d\s:.\-/+~⏰⏱x]+$/;
+
+function shouldTranslateText(text: string | undefined, targetLang: AppLanguage): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!trimmed || PURE_TIME_OR_DATE_REGEX.test(trimmed)) return false;
+
+  // If already in static dictionary or dynamic cache, no remote call needed
+  if (targetLang === 'th' && (VI_TO_TH_MAP.has(trimmed) || dynamicCache[getCacheKey(trimmed, 'th')])) {
+    return false;
+  }
+  if (targetLang === 'vi' && (TH_TO_VI_MAP.has(trimmed) || dynamicCache[getCacheKey(trimmed, 'vi')])) {
+    return false;
+  }
+
+  const hasThai = THAI_REGEX.test(trimmed);
+  const hasLatin = LATIN_LETTER_REGEX.test(trimmed);
+
+  if (targetLang === 'th') {
+    // Needs translation to Thai if it has Vietnamese/Latin letters and is not already Thai
+    return hasLatin && !hasThai;
+  } else {
+    // Needs translation to Vietnamese if it has Thai characters
+    return hasThai;
+  }
+}
+
+export async function translateSingleTextAsync(
+  text: string,
+  targetLang: AppLanguage
+): Promise<string> {
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+
+  // 1. Check static dictionary or existing cache first
+  const syncResult = localizeDynamicText(trimmed, targetLang);
+  if (syncResult !== trimmed && syncResult !== normalizeVietnameseLegacyTerms(trimmed)) {
+    return syncResult;
+  }
+
+  if (!shouldTranslateText(trimmed, targetLang)) {
+    return syncResult;
+  }
+
+  const sourceLang: AppLanguage = targetLang === 'th' ? 'vi' : 'th';
+  const options: NativeTranslatorOptions = {
+    sourceLanguage: sourceLang,
+    targetLanguage: targetLang,
+  };
+
+  let translated: string | null = null;
+
+  // 2. Try Native Built-in AI Translator API (window.Translator / self.Translator) if available
+  if (typeof self !== 'undefined' && 'Translator' in self) {
+    try {
+      const TranslatorApi = (self as unknown as { Translator: NativeTranslatorConstructor })
+        .Translator;
+      const availability = await TranslatorApi.availability(options);
+      if (availability === 'available') {
+        const translator = await TranslatorApi.create({
+          ...options,
+          monitor(m) {
+            m.addEventListener('downloadprogress', () => {});
+          },
+        });
+        const res = await translator.translate(trimmed);
+        if (res && res.trim()) {
+          translated = res.trim();
+        }
+      }
+    } catch {
+      // Fall back to cloud translation endpoint below
+    }
+  }
+
+  // 3. Fallback to Google Translate GTX Cloud Endpoint for universal mobile/desktop support
+  if (!translated) {
+    try {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(
+        trimmed
+      )}`;
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data) && Array.isArray(data[0])) {
+          const joined = data[0]
+            .map((segment: unknown) => (Array.isArray(segment) ? String(segment[0] || '') : ''))
+            .join('')
+            .trim();
+          if (joined) {
+            translated = joined;
+          }
+        }
+      }
+    } catch {
+      // Ignore network errors and return original text gracefully
+    }
+  }
+
+  if (translated) {
+    const finalOutput =
+      targetLang === 'vi' ? normalizeVietnameseLegacyTerms(translated) : translated;
+    // Store bidirectional cache so switching back restores the exact original text!
+    dynamicCache[getCacheKey(trimmed, targetLang)] = finalOutput;
+    dynamicCache[getCacheKey(finalOutput, sourceLang)] =
+      sourceLang === 'vi' ? normalizeVietnameseLegacyTerms(trimmed) : trimmed;
+    saveDynamicCache();
+    return finalOutput;
+  }
+
+  return syncResult;
+}
+
+export async function translateRoomDataAsync(
+  data: CoupleRoomData,
+  targetLang: AppLanguage
+): Promise<CoupleRoomData> {
+  // First pass: apply synchronous dictionary & cache translations
+  const syncLocalized = localizeRoomDataSync(data, targetLang);
+
+  // Collect all unique strings that still need async translation
+  const textsToTranslate = new Set<string>();
+  const collect = (val?: string) => {
+    if (val && shouldTranslateText(val, targetLang)) {
+      textsToTranslate.add(val.trim());
+    }
+  };
+
+  collect(syncLocalized.princeName);
+  collect(syncLocalized.princessName);
+
+  for (const plan of syncLocalized.plans) {
+    collect(plan.title);
+    collect(plan.dressCode);
+    collect(plan.princessMood);
+    collect(plan.approvalMessage);
+    for (const slot of plan.slots) {
+      collect(slot.periodName);
+      collect(slot.timeLabel);
+      for (const act of slot.activities) {
+        collect(act.title);
+        collect(act.timeRange);
+        collect(act.location);
+        collect(act.note);
+      }
+    }
+    for (const note of plan.stickyNotes) {
+      collect(note.authorName);
+      collect(note.content);
+      collect(note.tag);
+      collect(note.createdAt);
+    }
+    for (const fs of plan.floatingStickers) {
+      collect(fs.caption);
+    }
+  }
+
+  if (textsToTranslate.size === 0) {
+    return syncLocalized;
+  }
+
+  // Translate all unique custom strings in parallel
+  await Promise.all(
+    Array.from(textsToTranslate).map((txt) => translateSingleTextAsync(txt, targetLang))
+  );
+
+  // Second pass: now that dynamicCache is populated, apply localizeRoomDataSync again
+  return localizeRoomDataSync(syncLocalized, targetLang);
+}
+
+export function localizeRoomDataSync(
+  data: CoupleRoomData,
+  targetLang: AppLanguage
+): CoupleRoomData {
+  return {
+    ...data,
+    princeName: localizeDynamicText(data.princeName, targetLang),
+    princessName: localizeDynamicText(data.princessName, targetLang),
+    plans: data.plans.map((plan) => ({
+      ...plan,
+      title: localizeDynamicText(plan.title, targetLang),
+      dressCode: localizeDynamicText(plan.dressCode, targetLang),
+      princessMood: localizeDynamicText(plan.princessMood, targetLang),
+      approvalMessage: localizeDynamicText(plan.approvalMessage, targetLang),
+      slots: plan.slots.map((slot) => ({
+        ...slot,
+        periodName: localizeDynamicText(slot.periodName, targetLang),
+        timeLabel: localizeDynamicText(slot.timeLabel, targetLang),
+        activities: slot.activities.map((act) => ({
+          ...act,
+          title: localizeDynamicText(act.title, targetLang),
+          timeRange: localizeDynamicText(act.timeRange, targetLang),
+          location: localizeDynamicText(act.location, targetLang),
+          note: localizeDynamicText(act.note, targetLang),
+        })),
+      })),
+      stickyNotes: plan.stickyNotes.map((n) => ({
+        ...n,
+        authorName: localizeDynamicText(n.authorName, targetLang),
+        content: localizeDynamicText(n.content, targetLang),
+        tag: localizeDynamicText(n.tag, targetLang),
+        createdAt: localizeDynamicText(n.createdAt, targetLang),
+      })),
+      floatingStickers: plan.floatingStickers.map((fs) => ({
+        ...fs,
+        caption: localizeDynamicText(fs.caption, targetLang),
+      })),
+    })),
+  };
 }
 
 export const QUICK_NOTE_TEMPLATES: Record<AppLanguage, string[]> = {
@@ -142,15 +441,15 @@ export const QUICK_NOTE_TEMPLATES: Record<AppLanguage, string[]> = {
     'Qua đón em nhớ mang theo trà sữa ít đá 70% đường nha! 🧋💕',
     'Hôm nay Công chúa mặc váy xinh lắm, nhớ chuẩn bị chụp 500 tấm ảnh nha! 📸👗',
     'Cho em xin phép cao su 15 phút để uốn tóc nha hihi 😴🌸',
-    'Đi chơi mỏi chân là Hoàng tử phải cõng Công chúa đó! 🐻🐰',
-    'Mọi chi phí hôm nay để Hoàng tử lo hết, Nàng chỉ việc vui thôi! 💳✨',
+    'Đi chơi mỏi chân là Kẻ Si Tình phải cõng Công chúa đó! 🐻🐰',
+    'Mọi chi phí hôm nay để Kẻ Si Tình lo hết, Nàng chỉ việc vui thôi! 💳✨',
   ],
   th: [
     'ตอนมารับอย่าลืมซื้อชานมไข่มุกหวาน 70% น้ำแข็งน้อยมาฝากด้วยน้า! 🧋💕',
     'วันนี้เจ้าหญิงแต่งตัวจัดเต็ม เตรียมถ่ายรูปให้ 500 รูปเลยนะ! 📸👗',
     'ขออนุญาตเลท 15 นาทีม้วนผมแต่งหน้าแป๊บนึงนะคะ ฮิฮิ 😴🌸',
-    'ถ้าเดินเที่ยวเมื่อยขา เจ้าชายต้องให้เจ้าหญิงขี่หลังด้วยน้า! 🐻🐰',
-    'ทริปนี้เจ้าชายสายเปย์ดูแลให้หมดเลย เจ้าหญิงแค่ยิ้มหวานๆ ก็พอ! 💳✨',
+    'ถ้าเดินเที่ยวเมื่อยขา คนคลั่งรักต้องให้เจ้าหญิงขี่หลังด้วยน้า! 🐻🐰',
+    'ทริปนี้คนคลั่งรักสายเปย์ดูแลให้หมดเลย เจ้าหญิงแค่ยิ้มหวานๆ ก็พอ! 💳✨',
   ],
 };
 
@@ -196,7 +495,8 @@ export const NOTE_COLOR_LABELS: Record<
 export const UI_TEXT = {
   vi: {
     appSubtitle: 'Kéo thả lịch trình hẹn hò',
-    pwaBadge: 'PWA Couple Planner 💕',
+    pwaBadge: 'Lovely Planner 💕',
+    translatingBadge: '✨ Đang dịch tự động...',
     roomPinLabel: 'Mã Phòng',
     roomPinTooltip: 'Đổi mã phòng PIN hoặc cài đặt đồng bộ Firebase',
     shareBtn: 'Gửi Cho Nàng',
@@ -285,7 +585,7 @@ export const UI_TEXT = {
     cancelBtn: 'Hủy',
     submitNoteBtn: 'Dán Giấy Nhớ Lên Plan!',
     revisionModalTitle: '😤 Công Chúa Yêu Cầu Đổi Món / Đòi Thêm Kèo!',
-    revisionModalSubtitle: 'Hãy viết sắc lệnh để Hoàng Tử lập tức cập nhật lại lịch trình!',
+    revisionModalSubtitle: 'Hãy viết sắc lệnh để Kẻ Si Tình lập tức cập nhật lại lịch trình!',
     revisionQuote:
       '"Hứ! Lịch trình này cần phải bổ sung thêm món ngon hoặc quà dễ thương thì Công Chúa mới chịu bấm duyệt nha!" 👑🧋',
     revisionInputLabel: 'Nội dung Công Chúa muốn đổi hoặc thêm:',
@@ -295,7 +595,7 @@ export const UI_TEXT = {
     revisionSubmitBtn: '😤 Ban Hành Sắc Lệnh!',
     settingsModalTitle: '⚙️ Cài Đặt Cặp Đôi & Đồng Bộ Đa Nền Tảng',
     settingsModalSubtitle: 'Đổi biệt danh, Mã Phòng (PIN) và kết nối Firebase Realtime',
-    princeNicknameLabel: 'Biệt danh Hoàng Tử:',
+    princeNicknameLabel: 'Biệt danh Kẻ Si Tình:',
     princessNicknameLabel: 'Biệt danh Công Chúa:',
     roomPinInputLabel: '🔑 Mã Phòng Chung (Room PIN):',
     roomPinHelpText:
@@ -306,7 +606,7 @@ export const UI_TEXT = {
     closeBtn: 'Đóng',
     saveSettingsBtn: 'Lưu & Đồng Bộ Ngay',
     newPlanModalTitle: '🗓️ Tạo Plan Đi Chơi Mới',
-    newPlanModalSubtitle: 'Lên kế hoạch cho buổi hẹn tiếp theo của Hoàng Tử & Công Chúa',
+    newPlanModalSubtitle: 'Lên kế hoạch cho buổi hẹn tiếp theo của Kẻ Si Tình & Công Chúa',
     newPlanNameLabel: 'Tên buổi đi chơi / Dịp kỷ niệm:',
     newPlanNamePlaceholder: 'Ví dụ: Kỷ niệm 1 năm yêu nhau 💖 / Foodtour cuối tuần 🍜',
     createPlanSubmitBtn: '✨ Tạo Plan Ngay',
@@ -331,7 +631,8 @@ export const UI_TEXT = {
   },
   th: {
     appSubtitle: 'ลากวางสติกเกอร์จัดแพลนเดทสุดคิวท์',
-    pwaBadge: 'PWA แพลนเดทคู่รัก 💕',
+    pwaBadge: 'Lovely Planner 💕',
+    translatingBadge: '✨ กำลังแปลภาษาอัตโนมัติ...',
     roomPinLabel: 'รหัสห้อง',
     roomPinTooltip: 'เปลี่ยนรหัสห้อง PIN หรือตั้งค่าซิงค์ข้อมูล Firebase',
     shareBtn: 'แชร์ให้หวานใจ',
@@ -420,7 +721,7 @@ export const UI_TEXT = {
     cancelBtn: 'ยกเลิก',
     submitNoteBtn: 'แปะกระดาษโน้ตลงแพลน!',
     revisionModalTitle: '😤 เจ้าหญิงขอเปลี่ยนเมนู / เพิ่มตารางเที่ยว!',
-    revisionModalSubtitle: 'เขียนประกาศิตเพื่อให้เจ้าชายรีบอัปเดตตารางเดทด่วนๆ!',
+    revisionModalSubtitle: 'เขียนประกาศิตเพื่อให้คนคลั่งรักรีบอัปเดตตารางเดทด่วนๆ!',
     revisionQuote:
       '"ชิ! แพลนนี้ต้องเพิ่มของอร่อยหรือของขวัญน่ารักๆ ก่อน เจ้าหญิงถึงจะยอมกดอนุมัตินะคะ!" 👑🧋',
     revisionInputLabel: 'สิ่งที่เจ้าหญิงอยากให้เปลี่ยนหรือเพิ่มเติม:',
@@ -430,7 +731,7 @@ export const UI_TEXT = {
     revisionSubmitBtn: '😤 ออกประกาศิตเจ้าหญิง!',
     settingsModalTitle: '⚙️ ตั้งค่าคู่รัก & ซิงค์ข้อมูลข้ามอุปกรณ์',
     settingsModalSubtitle: 'เปลี่ยนชื่อเรียก รหัสห้อง (PIN) และเชื่อมต่อ Firebase Realtime',
-    princeNicknameLabel: 'ชื่อเรียกเจ้าชาย:',
+    princeNicknameLabel: 'ชื่อเรียกคนคลั่งรัก:',
     princessNicknameLabel: 'ชื่อเรียกเจ้าหญิง:',
     roomPinInputLabel: '🔑 รหัสห้องคู่รัก (Room PIN):',
     roomPinHelpText:
@@ -441,7 +742,7 @@ export const UI_TEXT = {
     closeBtn: 'ปิด',
     saveSettingsBtn: 'บันทึก & ซิงค์ทันที',
     newPlanModalTitle: '🗓️ สร้างแพลนออกเดทใหม่',
-    newPlanModalSubtitle: 'วางแผนทริปต่อไปสำหรับเจ้าชายและเจ้าหญิง',
+    newPlanModalSubtitle: 'วางแผนทริปต่อไปสำหรับคนคลั่งรักและเจ้าหญิง',
     newPlanNameLabel: 'ชื่อทริปเดท / โอกาสพิเศษ:',
     newPlanNamePlaceholder: 'ตัวอย่าง: ครบรอบ 1 ปี 💖 / ตะลุยกินวันหยุด 🍜',
     createPlanSubmitBtn: '✨ สร้างแพลนเลย',
